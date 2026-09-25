@@ -65,25 +65,20 @@ html, body { width: 100%; height: 100%; background: #060A10; font-family: 'DM Sa
    PHONE SHELL
    ======================================== */
 #app {
-  display: flex; align-items: center; justify-content: center;
-  width: 100vw; height: 100vh; background: radial-gradient(ellipse at 30% 20%, #1a2040 0%, #060A10 60%);
+  display: flex; align-items: stretch; justify-content: stretch;
+  width: 100vw; height: 100vh; background: var(--bg);
 }
 .phone-shell {
-  position: relative; width: 393px; height: 852px;
-  background: var(--bg); border-radius: 52px;
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 0 0 11px #1a1a1f, 0 0 0 12px #2a2a32, var(--shadow), 0 40px 80px rgba(0,0,0,0.7);
+  position: relative; width: 100vw; height: 100vh;
+  background: var(--bg); border-radius: 0;
+  box-shadow: none; border: none;
   overflow: hidden; display: flex; flex-direction: column;
   transition: background 0.35s ease;
 }
 /* Physical buttons */
-.phone-shell::before {
-  content: ''; position: absolute; left: -13px; top: 130px;
-  width: 4px; height: 36px; background: #1e1e26; border-radius: 3px 0 0 3px;
-  box-shadow: 0 50px 0 #1e1e26, 0 96px 0 #1e1e26;
-}
+.phone-shell::before,
 .phone-shell::after {
-  content: ''; position: absolute; right: -13px; top: 160px;
-  width: 4px; height: 60px; background: #1e1e26; border-radius: 0 3px 3px 0;
+  display: none;
 }
 
 /* Dynamic Island */
@@ -704,7 +699,7 @@ input:checked + .toggle-track::after { transform: translateX(18px); }
    RESPONSIVE MEDIA (browser)
    ======================================== */
 @media (max-width: 480px) {
-  #app { align-items: flex-start; }
+  #app { align-items: stretch; }
   .phone-shell { width: 100vw; height: 100vh; border-radius: 0; box-shadow: none; }
   .modal-overlay { border-radius: 0; }
 }
