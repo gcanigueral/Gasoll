@@ -2927,6 +2927,7 @@ function attachFillupCameraListeners(vehicleId, editId) {
 
   const handleFile = (file) => {
     if (!file) return;
+    ocrDiagLog('IMAGE_SELECTED', { source: 'fillup-camera', fileName: file.name || null, size: file.size || null });
     // Show scanning status inside form
     const status = document.getElementById('fillup-ocr-status');
     const camBtn = document.getElementById('fillup-cam-btn');
@@ -2944,11 +2945,30 @@ function attachFillupCameraListeners(vehicleId, editId) {
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
+        ocrDiagLog('FILEREADER_OK', { dataUrlLength: (e.target.result || '').length });
         // Preprocess image before OCR
         const processed = await preprocessImageForOCR(e.target.result);
 
+        const tesseractInfo = {
+          typeofTesseract: typeof Tesseract,
+          typeofCreateWorker: typeof Tesseract !== 'undefined' ? typeof Tesseract.createWorker : 'undefined',
+          userAgent: navigator.userAgent,
+          protocol: location.protocol,
+          isHttps: location.protocol === 'https:',
+          tesseractVersion: Tesseract && Tesseract.version ? Tesseract.version : 'unavailable'
+        };
+        ocrDiagLog('TESSERACT_AVAILABLE', tesseractInfo);
+        if (typeof Tesseract === 'undefined') {
+          throw new Error('Tesseract is undefined');
+        }
+        if (typeof Tesseract.createWorker !== 'function') {
+          throw new Error('Tesseract.createWorker is not a function');
+        }
+
+        ocrDiagLog('WORKER_CREATE_START', { languages: 'spa+eng' });
         const worker = await Tesseract.createWorker('spa+eng', 1, {
           logger: m => {
+            console.log('[OCR_TESSERACT_LOGGER]', { status: m && m.status, progress: m && m.progress });
             if (m.status === 'recognizing text') {
               const pct = Math.round(m.progress * 100);
               const el = document.getElementById('fillup-ocr-pct');
@@ -2956,10 +2976,16 @@ function attachFillupCameraListeners(vehicleId, editId) {
             }
           }
         });
+        ocrDiagLog('WORKER_CREATE_OK', { workerExists: !!worker });
+
+        ocrDiagLog('RECOGNIZE_START', { processedLength: processed.length });
         const { data } = await worker.recognize(processed);
+        ocrDiagLog('RECOGNIZE_OK', { textLength: data && data.text ? data.text.length : 0 });
         await worker.terminate();
 
+        ocrDiagLog('PARSE_START', { rawTextLength: data && data.text ? data.text.length : 0 });
         const parsed = parseOCRText(data.text);
+        ocrDiagLog('PARSE_OK', { fieldKeys: Object.keys(parsed.fields || {}) });
         const f = parsed.fields;
 
         // Auto-fill form fields
@@ -2981,18 +3007,21 @@ function attachFillupCameraListeners(vehicleId, editId) {
             <span>Tiquet escanejat — ${detectedCount}/4 camps detectats. Revisa els valors.</span>
           </div>`;
         }
+        ocrDiagLog('OCR_COMPLETE', { detectedCount });
 
       } catch(err) {
+        ocrDiagError('OCR_COMPLETE', err);
         const status = document.getElementById('fillup-ocr-status');
         if (status) {
           status.innerHTML = `
           <div style="background:var(--red-dim);border:1px solid rgba(248,81,73,0.3);border-radius:var(--r);padding:10px 14px;font-size:12px;color:var(--red);display:flex;align-items:center;gap:8px">
-            <span>⚠</span><span>No s'ha pogut llegir el tiquet. Omple els camps manualment.</span>
+            <span>⚠</span><span>OCR ERROR · ${escapeHtml(err && err.message ? err.message : 'No s\'ha pogut llegir el tiquet.')}</span>
           </div>`;
         }
       }
     };
-    reader.readAsDataURL(file);
+    reader.onerror = () => {
+      ocrDiagError('FILEREADER_OK', new Error('FileReader failed while reading image'));
   };
 
   camInput.addEventListener('change', e => handleFile(e.target.files[0]));
@@ -3038,6 +3067,44 @@ function validateFillupForm(vehicleId, editId) {
 
 // ── OCR SCANNER ────────────────────────────────────────────
 // ─── OCR: PARSE TEXT FROM REAL TESSERACT RESULT ──────────────────────────────
+function showOcrDiagnosticMessage(message, isError = false) {
+  const status = document.getElementById('fillup-ocr-status');
+  if (status) {
+    status.style.display = 'block';
+    status.innerHTML = `
+      <div style="background:${isError ? 'var(--red-dim)' : 'var(--yellow-dim)'};border:1px solid ${isError ? 'rgba(248,81,73,0.35)' : 'rgba(210,153,34,0.35)'};border-radius:var(--r);padding:10px 12px;font-size:12px;color:${isError ? 'var(--red)' : 'var(--yellow)'};line-height:1.4">
+        ${escapeHtml(message)}
+      </div>`;
+    return;
+  }
+
+  const modalBody = document.getElementById('modal-body');
+  if (modalBody) {
+    modalBody.innerHTML = `
+      <div style="padding:18px 16px">
+        <div style="background:${isError ? 'var(--red-dim)' : 'var(--yellow-dim)'};border:1px solid ${isError ? 'rgba(248,81,73,0.35)' : 'rgba(210,153,34,0.35)'};border-radius:var(--r);padding:10px 12px;font-size:12px;color:${isError ? 'var(--red)' : 'var(--yellow)'};line-height:1.4">
+          ${escapeHtml(message)}
+        </div>
+      </div>`;
+  }
+}
+
+function ocrDiagLog(fase, details = {}) {
+  console.log('[OCR_DIAG]', { fase, ...details });
+}
+
+function ocrDiagError(fase, error) {
+  const err = error instanceof Error ? error : new Error(String(error));
+  const payload = {
+    fase,
+    'error.name': err.name,
+    'error.message': err.message,
+    'error.stack': err.stack || null
+  };
+  console.error('[OCR_DIAG_ERROR]', payload);
+  showOcrDiagnosticMessage(`OCR ERROR · ${fase}: ${err.message || String(err)}`, true);
+}
+
 function parseOCRText(text) {
   const norm = t => t.replace(/,/g, '.').replace(/[oO]/g, '0').replace(/[lI]/g, '1');
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -3141,28 +3208,42 @@ function parseOCRText(text) {
 // ─── OCR: REAL TESSERACT PROCESSING ──────────────────────────────────────────
 // Preprocess image for better OCR (grayscale + contrast + scale)
 function preprocessImageForOCR(dataUrl) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
+    ocrDiagLog('PREPROCESS_START', { urlLength: (dataUrl || '').length });
     const img = new Image();
     img.onload = () => {
-      const scale = Math.min(1600 / img.width, 2200 / img.height, 2);
-      const canvas = document.createElement('canvas');
-      canvas.width  = Math.round(img.width  * scale);
-      canvas.height = Math.round(img.height * scale);
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      try {
+        const scale = Math.min(1600 / img.width, 2200 / img.height, 2);
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.round(img.width  * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          throw new Error('canvas.getContext("2d") returned null');
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-      // Grayscale + contrast boost
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const d = imgData.data;
-      for (let i = 0; i < d.length; i += 4) {
-        const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-        const c    = Math.min(255, Math.max(0, (gray - 128) * 1.6 + 148));
-        d[i] = d[i+1] = d[i+2] = c;
+        // Grayscale + contrast boost
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+          const c    = Math.min(255, Math.max(0, (gray - 128) * 1.6 + 148));
+          d[i] = d[i+1] = d[i+2] = c;
+        }
+        ctx.putImageData(imgData, 0, 0);
+        ocrDiagLog('PREPROCESS_OK', { width: canvas.width, height: canvas.height });
+        resolve(canvas.toDataURL('image/jpeg', 0.95));
+      } catch (error) {
+        ocrDiagError('PREPROCESS_START', error);
+        reject(error);
       }
-      ctx.putImageData(imgData, 0, 0);
-      resolve(canvas.toDataURL('image/jpeg', 0.95));
     };
-    img.onerror = () => resolve(dataUrl); // fallback: use original
+    img.onerror = () => {
+      const err = new Error('Image load failed in preprocessImageForOCR');
+      ocrDiagError('PREPROCESS_START', err);
+      resolve(dataUrl);
+    };
     img.src = dataUrl;
   });
 }
@@ -3173,11 +3254,30 @@ async function runTesseractOCR(imageData) {
   renderOCRScanningUI();
 
   try {
+    const tesseractInfo = {
+      typeofTesseract: typeof Tesseract,
+      typeofCreateWorker: typeof Tesseract !== 'undefined' ? typeof Tesseract.createWorker : 'undefined',
+      userAgent: navigator.userAgent,
+      protocol: location.protocol,
+      isHttps: location.protocol === 'https:',
+      tesseractVersion: Tesseract && Tesseract.version ? Tesseract.version : 'unavailable'
+    };
+    ocrDiagLog('TESSERACT_AVAILABLE', tesseractInfo);
+
+    if (typeof Tesseract === 'undefined') {
+      throw new Error('Tesseract is undefined');
+    }
+    if (typeof Tesseract.createWorker !== 'function') {
+      throw new Error('Tesseract.createWorker is not a function');
+    }
+
     // Preprocess for better recognition
     const processed = await preprocessImageForOCR(imageData);
 
+    ocrDiagLog('WORKER_CREATE_START', { languages: 'spa+eng' });
     const worker = await Tesseract.createWorker('spa+eng', 1, {
       logger: m => {
+        console.log('[OCR_TESSERACT_LOGGER]', { status: m && m.status, progress: m && m.progress });
         if (m.status === 'recognizing text') {
           const pct = Math.round(m.progress * 100);
           const el = document.getElementById('ocr-progress');
@@ -3185,23 +3285,30 @@ async function runTesseractOCR(imageData) {
         }
       }
     });
+    ocrDiagLog('WORKER_CREATE_OK', { workerExists: !!worker });
 
+    ocrDiagLog('RECOGNIZE_START', { processedLength: processed.length });
     const { data } = await worker.recognize(processed);
+    ocrDiagLog('RECOGNIZE_OK', { textLength: data && data.text ? data.text.length : 0 });
     await worker.terminate();
 
+    ocrDiagLog('PARSE_START', { rawTextLength: data && data.text ? data.text.length : 0 });
     const parsed = parseOCRText(data.text);
+    ocrDiagLog('PARSE_OK', { fieldKeys: Object.keys(parsed.fields || {}) });
     parsed.name = parsed.fields.station || 'Foto escaneajada';
     parsed.id = 0;
 
     S.ocrResult = parsed;
     S.ocrStep = 'results';
+    ocrDiagLog('OCR_COMPLETE', { resultFields: Object.keys(parsed.fields || {}) });
     renderOCRModalContent();
   } catch(err) {
+    ocrDiagError('OCR_COMPLETE', err);
     document.getElementById('modal-body').innerHTML = `
     <div style="text-align:center;padding:32px">
       <div style="font-size:48px">😔</div>
       <div style="font-size:15px;font-weight:700;color:var(--t1);margin:12px 0 8px">Error en l'escaneig</div>
-      <div style="font-size:13px;color:var(--t2)">${escapeHtml(err.message || 'No s\'ha pogut processar la imatge.')}</div>
+      <div style="font-size:13px;color:var(--t2)">OCR ERROR · ${escapeHtml(err && err.message ? err.message : 'No s\'ha pogut processar la imatge.')}</div>
       <button class="btn-secondary" style="margin-top:16px" id="ocr-err-back">← Tornar</button>
     </div>`;
     document.getElementById('modal-footer').innerHTML = '';
